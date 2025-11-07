@@ -6,7 +6,7 @@
 
 **Give your colonists unique AI-generated voices that react to their emotions, situations, and personalities!**
 
-[Steam Workshop](YOUR_WORKSHOP_LINK) | [Discord Server](https://discord.gg/yWC3Arr7pA) | [Report Issues](https://github.com/YOUR_USERNAME/colonist-voices/issues)
+[Steam Workshop]([https://steamcommunity.com/sharedfiles/filedetails/?id=3600539208]) | [Discord Server](https://discord.gg/yWC3Arr7pA) | [Report Issues](https://github.com/braasdas/colonist-voices/issues)
 
 ---
 
