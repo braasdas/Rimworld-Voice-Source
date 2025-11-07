@@ -1,0 +1,22 @@
+# C# Source Files Required
+
+These files are located at:
+C:\Users\benja\OneDrive\Documents\RIMWORLD MOD BACKEND & FRONTEND MOD\ColonistVoices-Backend\Source\
+
+Please manually copy ALL .cs files and .csproj files from that directory to this frontend/Source directory.
+
+Required files:
+- AudioManager.cs
+- BackendAPIHandler.cs  
+- ColonistContextBuilder.cs
+- ColonistVoices.csproj
+- ColonistVoicesSettings.cs
+- CoroutineManager.cs
+- SpeechController.cs
+- SpeechHistoryEntry.cs
+- VoiceSelector.cs
+- build_simple.bat
+
+Total: 9 C# files + 1 project file + 1 batch file = 11 files
+
+After copying, you can build the mod using build_simple.bat (Windows) or msbuild.

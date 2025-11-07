@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Vanilla Expanded - Colonist Voices</name>
+  <author>Tempperment 22</author>
+  <packageId>colonistvoices.rimworld</packageId>
+  <supportedVersions>
+    <li>1.6</li>
+  </supportedVersions>
+  <description>🎤 Bring Your Colony to Life with AI-Generated Voices!
+
+Your colonists will speak with unique, emotionally-driven AI voices based on their personality, mood, current activities, and life events. Every colonist gets their own voice that reacts dynamically to what's happening in their world.
+
+Video: https://www.youtube.com/watch?v=IABqrqrV5Qw
+
+⭐ DEMO VERSION - FREE TO TRY ⭐
+• 10 FREE speeches per month (no registration required!)
+• Full access to all features and voice quality
+• Perfect for testing if you love it
+
+💎 How to Get FREE Unlimited Access (Required Reading!)
+This mod provides powerful AI voices, but generating speech costs real money. To keep this mod 100% free for everyone, we use a community-pool system.
+
+To get permanent unlimited access, you simply trade one free resource for another:
+
+Get a Free API Key: Go to ElevenLabs, sign up for their free tier, and get your free API key. (This takes about 60 seconds).
+
+Join our Discord: discord.gg/yWC3Arr7pA
+
+Contribute Your Key: Follow the instructions in Discord to contribute your free-tier ElevenLabs key to the community pool.
+
+Receive Your Code: A bot or admin will give you a permanent Supporter Code in return.
+
+Redeem: Go to Mod Options → Colonist Voices and enter your Supporter Code.
+
+You are now a community supporter and have unlimited, permanent access for free! Your contribution helps power the mod for everyone.
+
+✨ FEATURES:
+• NO API KEYS NEEDED - Everything handled by our managed backend
+• Unique AI voice for each colonist
+• Emotionally expressive speech with laughter, sighs, whispers, and more
+• Context-aware dialogue based on mood, health, relationships, and activities
+• Highly configurable speech frequency and triggers
+• Works seamlessly in the background
+
+⚙️ HOW IT WORKS:
+1. Install the mod
+2. Your first 10 speeches are FREE (no setup required!)
+3. Colonists will speak automatically during gameplay
+4. Join Discord for unlimited access
+
+🎮 GAMEPLAY:
+Colonists react naturally to their world:
+• "[excited] This is AMAZING! We actually pulled it off!"
+• "[exhausted sigh] Another raid... I can't keep doing this."
+• "[whispers urgently] Did you hear that? Something's out there..."
+
+Each speech is generated uniquely based on the colonist's:
+• Current thoughts and mood
+• Health conditions
+• Recent memories
+• Relationships with other colonists
+• What they're currently doing
+
+🔧 TECHNICAL:
+• Powered by OpenAI GPT-4 and ElevenLabs v3
+• Centralized backend for optimal performance
+• No local API setup required
+• Speech history tracking prevents repetition
+• Adjustable frequency (max 5% chance per hour)
+• Minimum 6-hour cooldown between speeches per colonist
+
+🤝 COMMUNITY:
+Join our Discord to:
+• Get FREE unlimited access codes
+• Share funny colonist quotes
+• Request features
+• Report issues
+• Contribute to development
+
+Discord: discord.gg/yWC3Arr7pA
+
+📝 NOTES:
+• First speech may take a few seconds to generate
+• Internet connection required
+• Demo quota resets monthly (1st of each month)
+• Supporter status is permanent once redeemed
+
+⚠️ REQUIREMENTS:
+• RimWorld 1.6
+• Harmony (auto-downloads from Steam Workshop)
+• Active internet connection
+
+This default is a DEMO version with limited free speeches. However full unlimited access is available FREE to all community supporters!
+
+If you want a version that doesnt use my servers as a backend you can use this version here https://steamcommunity.com/sharedfiles/filedetails/?id=3599437545
+
+Note: This mod is in no way affiliated with the creator and mods of the OG Vanilla Expanded mod series.</description>
+  <modDependencies>
+    <li>
+      <packageId>brrainz.harmony</packageId>
+      <displayName>Harmony</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+      <downloadUrl>https://github.com/pardeike/HarmonyRimWorld/releases/latest</downloadUrl>
+    </li>
+  </modDependencies>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+  </loadAfter>
+  <url>https://discord.gg/yWC3Arr7pA</url>
+</ModMetaData>
