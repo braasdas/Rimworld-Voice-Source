@@ -95,18 +95,23 @@ namespace ColonistVoices
         private bool isEditingApiKey = false;
         private string supporterCode = "";
         
+        // Restricted to gpt-4o-mini only for cost management
         private string[] availableModels = new string[]
         {
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-            "gpt-4",
-            "gpt-3.5-turbo"
+            "gpt-4o-mini"
         };
         
         public ColonistVoicesMod(ModContentPack content) : base(content)
         {
             settings = GetSettings<ColonistVoicesSettings>();
+            
+            // Force model to gpt-4o-mini for cost management
+            if (settings.openAIModel != "gpt-4o-mini")
+            {
+                Log.Message("[ColonistVoices] Forcing model to gpt-4o-mini for cost management");
+                settings.openAIModel = "gpt-4o-mini";
+                settings.Write();
+            }
             
             // Generate hardware ID on first launch
             if (string.IsNullOrEmpty(settings.hardwareId))
@@ -350,20 +355,10 @@ namespace ColonistVoices
             listingStandard.Label((TaggedString)"=== Model Settings ===", -1f);
             listingStandard.Gap(6f);
             
-            listingStandard.Label(string.Format("OpenAI Model: {0}", settings.openAIModel));
-            if (listingStandard.ButtonText(string.Format("Change Model ({0})", settings.openAIModel)))
-            {
-                List<FloatMenuOption> options = new List<FloatMenuOption>();
-                foreach (string model in availableModels)
-                {
-                    string modelCopy = model;
-                    options.Add(new FloatMenuOption(model, delegate
-                    {
-                        settings.openAIModel = modelCopy;
-                    }));
-                }
-                Find.WindowStack.Add(new FloatMenu(options));
-            }
+            listingStandard.Label(string.Format("OpenAI Model: {0} (Fixed)", settings.openAIModel));
+            Text.Font = GameFont.Tiny;
+            listingStandard.Label("Model is fixed to gpt-4o-mini for cost management");
+            Text.Font = GameFont.Small;
             listingStandard.Gap(6f);
             
             listingStandard.Label("System Prompt (OpenAI instructions):");
