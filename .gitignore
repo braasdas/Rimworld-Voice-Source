@@ -45,6 +45,7 @@ desktop.ini
 *.swp
 *.swo
 *~
+.claude/
 
 # Temporary files
 temp/

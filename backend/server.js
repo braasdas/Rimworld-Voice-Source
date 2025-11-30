@@ -11,6 +11,7 @@ const session = require('express-session');
 const crypto = require('crypto');
 const keyPoolManager = require('./services/keyPoolManager');
 const userManager = require('./services/userManager');
+const proxyPoolManager = require('./services/proxyPoolManager');
 const db = require('./services/database');
 
 // Load environment variables
@@ -39,6 +40,46 @@ app.use(session({
 // IP-based usage tracking for headless mode
 const ipUsageCache = new Map(); // { ip: { count: 0, resetDate: Date } }
 
+// Helper function to determine the correct token parameter and limit for OpenAI models
+function getModelTokenConfig(model) {
+    const modelLower = model.toLowerCase();
+    
+    // GPT-5 series - ALL variants use max_completion_tokens
+    if (modelLower.includes('gpt-5')) {
+        // Context: 400k input, 128k output max
+        return {
+            paramName: 'max_completion_tokens',
+            defaultLimit: 150,    // Good for short speech
+            maxLimit: 128000      // GPT-5 series max output tokens
+        };
+    }
+    
+    // O1/O3/O4 series uses max_completion_tokens
+    if (modelLower.includes('o1') || modelLower.includes('o3') || modelLower.includes('o4')) {
+        return {
+            paramName: 'max_completion_tokens',
+            defaultLimit: 2000,   // O-series often needs more for reasoning
+            maxLimit: 100000      // O-series models have higher limits
+        };
+    }
+    
+    // GPT-4o variants - use max_tokens
+    if (modelLower.includes('gpt-4o')) {
+        return {
+            paramName: 'max_tokens',
+            defaultLimit: 150,    // Good for short speech
+            maxLimit: 4096        // Standard GPT-4o limit (some versions go to 16k)
+        };
+    }
+    
+    // GPT-4 and GPT-3.5-Turbo - use max_tokens
+    return {
+        paramName: 'max_tokens',
+        defaultLimit: 100,        // Conservative default
+        maxLimit: 4096           // Standard limit
+    };
+}
+
 // Discord webhook for notifications
 async function sendDiscordNotification(title, message, color = 3447003, fields = []) {
     try {
@@ -59,7 +100,7 @@ async function sendDiscordNotification(title, message, color = 3447003, fields =
     }
 }
 
-// Discord alert for errors
+// Discord alert for errors (PRIVATE - admin only)
 async function sendDiscordAlert(message, error = null) {
     try {
         const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
@@ -74,15 +115,116 @@ async function sendDiscordAlert(message, error = null) {
         };
 
         if (error) {
+            // Add basic error message
             embed.fields.push({
-                name: 'Error Details',
-                value: '```' + (error.stack || error.message || error.toString()).substring(0, 1000) + '```'
+                name: 'Error Message',
+                value: '```' + (error.message || error.toString()).substring(0, 500) + '```'
             });
+
+            // Add HTTP response details if available (API errors)
+            if (error.response) {
+                embed.fields.push({
+                    name: 'HTTP Status',
+                    value: `${error.response.status} ${error.response.statusText || ''}`,
+                    inline: true
+                });
+
+                // Try to extract API error body
+                if (error.response.data) {
+                    let apiError = '';
+                    try {
+                        if (Buffer.isBuffer(error.response.data)) {
+                            apiError = error.response.data.toString('utf-8');
+                        } else if (typeof error.response.data === 'object') {
+                            apiError = JSON.stringify(error.response.data, null, 2);
+                        } else {
+                            apiError = String(error.response.data);
+                        }
+                    } catch (e) {
+                        apiError = 'Could not parse response body';
+                    }
+
+                    embed.fields.push({
+                        name: 'API Response',
+                        value: '```json\n' + apiError.substring(0, 800) + '```'
+                    });
+                }
+            }
+
+            // Add error code if present
+            if (error.code) {
+                embed.fields.push({
+                    name: 'Error Code',
+                    value: error.code,
+                    inline: true
+                });
+            }
         }
 
         await axios.post(webhookUrl, { embeds: [embed] });
     } catch (e) {
         console.error('Failed to send Discord alert:', e.message);
+    }
+}
+
+// Send daily health stats to PUBLIC Discord webhook
+async function sendPublicHealthStats() {
+    try {
+        const publicWebhookUrl = 'https://discord.com/api/webhooks/1437297954875510906/FUpUqWU0srzMDJ6Jtb0WK06apUOeLGCFIsKsrMohbm6_3SYgP46tNFQRFFkcUdSCru9c';
+        
+        // Get key pool stats
+        const stats = await keyPoolManager.getStats();
+        
+        // Calculate leftover quota
+        const totalQuota = parseInt(stats.total_quota_available) || 0;
+        const usedQuota = parseInt(stats.total_quota_used) || 0;
+        const leftoverQuota = totalQuota - usedQuota;
+        const quotaPercentage = totalQuota > 0 ? ((leftoverQuota / totalQuota) * 100).toFixed(1) : 0;
+        
+        // Determine health emoji and color
+        const avgHealth = parseFloat(stats.avg_health) || 0;
+        let healthEmoji = '🟢';
+        let embedColor = 5763719; // Green
+        
+        if (avgHealth < 50) {
+            healthEmoji = '🔴';
+            embedColor = 15158332; // Red
+        } else if (avgHealth < 75) {
+            healthEmoji = '🟡';
+            embedColor = 16776960; // Yellow
+        }
+        
+        const embed = {
+            title: '📊 Colonist Voices - Daily Health Report',
+            description: `Daily statistics for the ElevenLabs API key pool`,
+            color: embedColor,
+            timestamp: new Date().toISOString(),
+            fields: [
+                {
+                    name: '🔑 Total Keys',
+                    value: `**${stats.total_keys}** keys in pool\n${stats.active_keys} active, ${stats.paused_keys} paused`,
+                    inline: true
+                },
+                {
+                    name: `${healthEmoji} Average Health`,
+                    value: `**${avgHealth.toFixed(1)}%**`,
+                    inline: true
+                },
+                {
+                    name: '📦 Leftover Quota',
+                    value: `**${leftoverQuota.toLocaleString()}** characters\n(${quotaPercentage}% remaining)`,
+                    inline: true
+                }
+            ],
+            footer: {
+                text: 'Stats update daily at midnight UTC'
+            }
+        };
+        
+        await axios.post(publicWebhookUrl, { embeds: [embed] });
+        console.log('✓ Public health stats sent to Discord');
+    } catch (error) {
+        console.error('Failed to send public health stats:', error.message);
     }
 }
 
@@ -334,23 +476,48 @@ app.post('/api/speech/generate', async (req, res) => {
         
         try {
             const openaiStart = Date.now();
+            
+            // Get model-specific token configuration
+            const tokenConfig = getModelTokenConfig(model);
+            
+            // Build request body dynamically
+            const requestBody = {
+                model: model,
+                messages: [
+                    {
+                        role: 'system',
+                        content: system_prompt
+                    },
+                    {
+                        role: 'user',
+                        content: `Context:\n${context}\n\nGenerate a short spoken line for this colonist:`
+                    }
+                ]
+            };
+            
+            // Only add temperature for models that support it
+            // GPT-5 series and O-series (o1, o3, o4) only support default temperature of 1
+            const modelLower = model.toLowerCase();
+            const supportsCustomTemperature = !modelLower.includes('gpt-5') && 
+                                             !modelLower.includes('o1') && 
+                                             !modelLower.includes('o3') && 
+                                             !modelLower.includes('o4');
+            
+            if (supportsCustomTemperature) {
+                requestBody.temperature = 0.8;
+                console.log(`[${requestId}] Using temperature: 0.8`);
+            } else {
+                console.log(`[${requestId}] Using default temperature (1) for ${model}`);
+            }
+            
+            // Add the correct token parameter based on model
+            requestBody[tokenConfig.paramName] = tokenConfig.defaultLimit;
+            
+            console.log(`[${requestId}] Using ${tokenConfig.paramName}: ${tokenConfig.defaultLimit} for model: ${model}`);
+            
             const openaiResponse = await axios.post(
                 'https://api.openai.com/v1/chat/completions',
-                {
-                    model: model,
-                    messages: [
-                        {
-                            role: 'system',
-                            content: system_prompt
-                        },
-                        {
-                            role: 'user',
-                            content: `Context:\n${context}\n\nGenerate a short spoken line for this colonist:`
-                        }
-                    ],
-                    max_tokens: 100,
-                    temperature: 0.8
-                },
+                requestBody,
                 {
                     headers: {
                         'Content-Type': 'application/json',
@@ -362,6 +529,17 @@ app.post('/api/speech/generate', async (req, res) => {
 
             openaiTime = Date.now() - openaiStart;
             speechText = openaiResponse.data.choices[0].message.content.trim();
+            
+            // Validate that we got actual text back
+            if (!speechText || speechText.length === 0) {
+                console.error(`[${requestId}] ✗ OpenAI returned empty text!`);
+                console.error(`[${requestId}] Full response:`, JSON.stringify(openaiResponse.data, null, 2));
+                return res.status(500).json({
+                    success: false,
+                    error: 'OpenAI returned empty text. This may be due to model restrictions or invalid prompts.'
+                });
+            }
+            
             console.log(`[${requestId}] ✓ OpenAI Success (${openaiTime}ms): "${speechText}"`);
             
         } catch (error) {
@@ -374,16 +552,21 @@ app.post('/api/speech/generate', async (req, res) => {
             });
         }
 
-        // Step 2: Call ElevenLabs with selected key
+        // Step 2: Call ElevenLabs with selected key and Oxylabs residential proxy
         console.log(`[${requestId}] [2/2] Calling ElevenLabs with key: ${selectedKey.key_name}...`);
         console.log(`[${requestId}] Voice ID: ${voice_id}`);
         console.log(`[${requestId}] Voice settings - stability: ${stability}, similarity_boost: ${similarity_boost}`);
+
+        // Use Oxylabs residential proxy based on the key's country_code
+        const keyCountryCode = selectedKey.country_code || 'us';
+        console.log(`[${requestId}] Using Oxylabs residential proxy for country: ${keyCountryCode.toUpperCase()}`);
+
         let audioData;
         let elevenLabsTime;
-        
+
         try {
             const elevenLabsStart = Date.now();
-            
+
             const requestBody = {
                 text: speechText,
                 model_id: 'eleven_v3',
@@ -392,49 +575,59 @@ app.post('/api/speech/generate', async (req, res) => {
                     similarity_boost: similarity_boost
                 }
             };
-            
+
             console.log(`[${requestId}] Request body:`, JSON.stringify(requestBody, null, 2));
+
+            // Build axios config with Oxylabs residential proxy
+            const axiosConfig = {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'xi-api-key': selectedKey.api_key
+                },
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                decompress: true,
+                validateStatus: function (status) {
+                    return status >= 200 && status < 300;
+                }
+            };
+
+            // Add Oxylabs residential proxy configuration based on key's country code
+            const proxyConfig = proxyPoolManager.getOxylabsProxyConfig(keyCountryCode);
+            Object.assign(axiosConfig, proxyConfig);
+            console.log(`[${requestId}] Proxy configured: pr.oxylabs.io:7777 (${keyCountryCode.toUpperCase()})`);
             
             const elevenLabsResponse = await axios.post(
                 `https://api.elevenlabs.io/v1/text-to-speech/${voice_id}`,
                 requestBody,
-                {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'xi-api-key': selectedKey.api_key
-                    },
-                    responseType: 'arraybuffer',
-                    timeout: 30000,
-                    decompress: true,
-                    validateStatus: function (status) {
-                        return status >= 200 && status < 300;
-                    }
-                }
+                axiosConfig
             );
 
             elevenLabsTime = Date.now() - elevenLabsStart;
             audioData = Buffer.from(elevenLabsResponse.data).toString('base64');
             console.log(`[${requestId}] ✓ ElevenLabs Success (${elevenLabsTime}ms): ${audioData.length} chars (base64)`);
-            
+            console.log(`[${requestId}] ✓ Oxylabs proxy (${keyCountryCode.toUpperCase()}) worked successfully`);
+
             // Record success for key pool health tracking
             await keyPoolManager.recordSuccess(selectedKey.id, speechText.length);
-            
+
         } catch (error) {
             console.error(`[${requestId}] ✗ ElevenLabs Error:`, error.message);
-            
+            console.error(`[${requestId}] ✗ Proxy used: Oxylabs (${keyCountryCode.toUpperCase()})`);
+
             let errorDetail = error.message;
             if (error.response) {
                 console.error(`[${requestId}] Response status:`, error.response.status);
                 console.error(`[${requestId}] Response headers:`, error.response.headers);
-                
+
                 if (error.response.data) {
                     try {
-                        const errorBody = Buffer.isBuffer(error.response.data) 
+                        const errorBody = Buffer.isBuffer(error.response.data)
                             ? error.response.data.toString('utf-8')
                             : JSON.stringify(error.response.data);
-                        
+
                         console.error(`[${requestId}] Response body:`, errorBody);
-                        
+
                         const errorJson = JSON.parse(errorBody);
                         errorDetail = errorJson.detail?.message || errorJson.message || errorBody;
                     } catch (parseErr) {
@@ -442,11 +635,11 @@ app.post('/api/speech/generate', async (req, res) => {
                     }
                 }
             }
-            
+
             await keyPoolManager.recordFailure(selectedKey.id, errorDetail);
-            
+
             await sendDiscordAlert(
-                `[${requestId}] ElevenLabs API call failed with key: ${selectedKey.key_name}`,
+                `[${requestId}] ElevenLabs API call failed with key: ${selectedKey.key_name} via Oxylabs proxy (${keyCountryCode.toUpperCase()})`,
                 error
             );
             
@@ -469,7 +662,7 @@ app.post('/api/speech/generate', async (req, res) => {
         } else {
             // Consume speech from user quota
             await userManager.consumeSpeech(user.id);
-            
+
             // Log usage
             await db.query(`
                 INSERT INTO usage_logs (user_id, elevenlabs_key_id, speech_text, voice_id, model_used, characters_used, success)
@@ -576,7 +769,8 @@ app.get('/api/admin/stats', requireAdminAuth, async (req, res) => {
     try {
         const key_stats = await keyPoolManager.getStats();
         const user_stats = await userManager.getStats();
-        res.json({ success: true, key_stats, user_stats });
+        const proxy_stats = await proxyPoolManager.getStats();
+        res.json({ success: true, key_stats, user_stats, proxy_stats });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -636,10 +830,151 @@ app.delete('/api/admin/keys/:id', requireAdminAuth, async (req, res) => {
     }
 });
 
+app.post('/api/admin/keys/:id/update-country', requireAdminAuth, async (req, res) => {
+    try {
+        const { country_code } = req.body;
+        if (!country_code) {
+            return res.status(400).json({ success: false, error: 'country_code is required' });
+        }
+        await db.query(
+            'UPDATE elevenlabs_keys SET country_code = $1, updated_at = NOW() WHERE id = $2',
+            [country_code.toLowerCase(), req.params.id]
+        );
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Test Oxylabs proxy connection
+app.post('/api/admin/test-oxylabs-proxy', requireAdminAuth, async (req, res) => {
+    try {
+        const { country_code } = req.body;
+        const cc = (country_code || 'us').toLowerCase();
+
+        console.log(`[ProxyTest] Testing Oxylabs proxy for country: ${cc.toUpperCase()}`);
+
+        // Get a healthy key for testing
+        const keyResult = await db.query(`
+            SELECT id, api_key, key_name FROM elevenlabs_keys
+            WHERE status = 'active' AND health_score >= 80
+            ORDER BY health_score DESC
+            LIMIT 1
+        `);
+
+        if (keyResult.rows.length === 0) {
+            return res.status(503).json({
+                success: false,
+                error: 'No healthy ElevenLabs keys available for testing'
+            });
+        }
+
+        const testKey = keyResult.rows[0];
+        const startTime = Date.now();
+
+        // Get Oxylabs proxy config
+        const proxyConfig = proxyPoolManager.getOxylabsProxyConfig(cc);
+        const proxyUrl = proxyPoolManager.buildOxylabsProxyUrl(cc);
+        console.log(`[ProxyTest] Using proxy URL: ${proxyUrl.replace(/:[^:@]+@/, ':****@')}`);
+
+        // Test with ElevenLabs
+        const testResponse = await axios.post(
+            'https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL',
+            {
+                text: 'Test',
+                model_id: 'eleven_turbo_v2_5',
+                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'xi-api-key': testKey.api_key
+                },
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                ...proxyConfig
+            }
+        );
+
+        const responseTime = Date.now() - startTime;
+
+        if (testResponse.status === 200 && testResponse.data) {
+            console.log(`[ProxyTest] SUCCESS - ${responseTime}ms`);
+            res.json({
+                success: true,
+                message: `Proxy test successful for ${cc.toUpperCase()}`,
+                response_time_ms: responseTime,
+                key_used: testKey.key_name,
+                proxy_host: 'pr.oxylabs.io:7777',
+                country: cc.toUpperCase()
+            });
+        } else {
+            res.json({
+                success: false,
+                error: `Unexpected response: ${testResponse.status}`
+            });
+        }
+
+    } catch (error) {
+        console.error('[ProxyTest] FAILED:', error.message);
+
+        let errorDetail = error.message;
+        if (error.response) {
+            errorDetail = `HTTP ${error.response.status}: ${error.response.statusText}`;
+            if (error.response.data) {
+                try {
+                    const body = Buffer.isBuffer(error.response.data)
+                        ? error.response.data.toString('utf-8')
+                        : JSON.stringify(error.response.data);
+                    errorDetail += ` - ${body.substring(0, 200)}`;
+                } catch (e) {}
+            }
+        } else if (error.code === 'ECONNREFUSED') {
+            errorDetail = 'Connection refused - proxy may be offline';
+        } else if (error.code === 'ETIMEDOUT') {
+            errorDetail = 'Connection timed out';
+        } else if (error.code === 'ENOTFOUND') {
+            errorDetail = 'Proxy host not found';
+        } else if (error.code === 'ECONNRESET') {
+            errorDetail = 'Connection reset by proxy';
+        }
+
+        res.json({
+            success: false,
+            error: errorDetail,
+            error_code: error.code || ''
+        });
+    }
+});
+
 app.get('/api/admin/users', requireAdminAuth, async (req, res) => {
     try {
-        const result = await db.query('SELECT user_key, tier, total_speeches_generated, free_speeches_remaining, created_at, last_used FROM users ORDER BY created_at DESC LIMIT 100');
+        const result = await db.query('SELECT user_key, username, tier, total_speeches_generated, free_speeches_remaining, created_at, last_used FROM users ORDER BY created_at DESC LIMIT 100');
         res.json({ success: true, users: result.rows });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/users/update-username', requireAdminAuth, async (req, res) => {
+    try {
+        const { user_key, username } = req.body;
+        
+        if (!user_key) {
+            return res.status(400).json({ success: false, error: 'Missing user_key' });
+        }
+        
+        // Allow empty username to clear it
+        const result = await db.query(
+            'UPDATE users SET username = $1 WHERE user_key = $2 RETURNING username',
+            [username || null, user_key]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'User not found' });
+        }
+        
+        res.json({ success: true, username: result.rows[0].username });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -667,8 +1002,187 @@ app.post('/api/admin/codes/generate', requireAdminAuth, async (req, res) => {
 app.get('/api/admin/logs', requireAdminAuth, async (req, res) => {
     try {
         const limit = parseInt(req.query.limit) || 50;
-        const result = await db.query('SELECT l.*, u.tier as user_tier, k.key_name FROM usage_logs l LEFT JOIN users u ON l.user_id = u.id LEFT JOIN elevenlabs_keys k ON l.elevenlabs_key_id = k.id ORDER BY l.created_at DESC LIMIT $1', [limit]);
+        const result = await db.query('SELECT l.*, u.tier as user_tier, u.username, k.key_name, p.proxy_name FROM usage_logs l LEFT JOIN users u ON l.user_id = u.id LEFT JOIN elevenlabs_keys k ON l.elevenlabs_key_id = k.id LEFT JOIN proxies p ON l.proxy_id = p.id ORDER BY l.created_at DESC LIMIT $1', [limit]);
         res.json({ success: true, logs: result.rows });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// PROXY MANAGEMENT ENDPOINTS
+app.get('/api/admin/proxies', requireAdminAuth, async (req, res) => {
+    try {
+        const result = await db.query('SELECT * FROM proxies ORDER BY priority ASC, status ASC');
+        res.json({ success: true, proxies: result.rows });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/admin/proxies/stats', requireAdminAuth, async (req, res) => {
+    try {
+        const stats = await proxyPoolManager.getStats();
+        res.json({ success: true, stats });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/proxies/test', requireAdminAuth, async (req, res) => {
+    try {
+        const { proxy_url, proxy_type } = req.body;
+        
+        if (!proxy_url) {
+            return res.status(400).json({ success: false, error: 'proxy_url is required' });
+        }
+
+        const startTime = Date.now();
+        
+        // Get a healthy key for testing
+        const keyResult = await db.query(`
+            SELECT id, api_key FROM elevenlabs_keys
+            WHERE status = 'active' AND health_score >= 80
+            ORDER BY health_score DESC
+            LIMIT 1
+        `);
+        
+        if (keyResult.rows.length === 0) {
+            return res.status(503).json({
+                success: false,
+                error: 'No healthy ElevenLabs keys available for testing'
+            });
+        }
+        
+        const testKey = keyResult.rows[0];
+        
+        // Parse proxy URL
+        let proxyConfig = {};
+        try {
+            const url = new URL(proxy_url);
+            proxyConfig = {
+                proxy: {
+                    protocol: url.protocol.replace(':', ''),
+                    host: url.hostname,
+                    port: parseInt(url.port)
+                }
+            };
+            
+            // Add authentication if present in URL (username:password format)
+            // If not present, proxy is IP-authenticated (already whitelisted)
+            if (url.username && url.password) {
+                proxyConfig.proxy.auth = {
+                    username: url.username,
+                    password: url.password
+                };
+            }
+        } catch (error) {
+            return res.status(400).json({
+                success: false,
+                error: 'Invalid proxy URL format',
+                details: error.message
+            });
+        }
+        
+        // Test the proxy with ElevenLabs
+        const testResponse = await axios.post(
+            `https://api.elevenlabs.io/v1/text-to-speech/EXAVITQu4vr4xnSDxMaL`, // Default "Sarah" voice
+            {
+                text: 'Working',
+                model_id: 'eleven_turbo_v2_5',
+                voice_settings: {
+                    stability: 0.5,
+                    similarity_boost: 0.75
+                }
+            },
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'xi-api-key': testKey.api_key
+                },
+                responseType: 'arraybuffer',
+                timeout: 30000,
+                ...proxyConfig
+            }
+        );
+        
+        const responseTime = Date.now() - startTime;
+        
+        if (testResponse.status === 200 && testResponse.data) {
+            res.json({
+                success: true,
+                message: 'Proxy test successful',
+                response_time_ms: responseTime
+            });
+        } else {
+            res.json({
+                success: false,
+                error: 'Unexpected response from ElevenLabs',
+                details: `Status: ${testResponse.status}`
+            });
+        }
+        
+    } catch (error) {
+        console.error('Proxy test error:', error.message);
+        
+        let errorDetail = error.message;
+        if (error.response) {
+            errorDetail = `HTTP ${error.response.status}: ${error.response.statusText}`;
+        } else if (error.code === 'ECONNREFUSED') {
+            errorDetail = 'Connection refused - proxy may be offline';
+        } else if (error.code === 'ETIMEDOUT') {
+            errorDetail = 'Connection timed out';
+        } else if (error.code === 'ENOTFOUND') {
+            errorDetail = 'Proxy host not found';
+        }
+        
+        res.json({
+            success: false,
+            error: errorDetail,
+            details: error.code || ''
+        });
+    }
+});
+
+app.post('/api/admin/proxies', requireAdminAuth, async (req, res) => {
+    try {
+        const proxy = await proxyPoolManager.addProxy(req.body);
+        res.json({ success: true, proxy });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/proxies/:id/pause', requireAdminAuth, async (req, res) => {
+    try {
+        await proxyPoolManager.pauseProxy(req.params.id, 'Manual pause via admin dashboard');
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/proxies/:id/resume', requireAdminAuth, async (req, res) => {
+    try {
+        await proxyPoolManager.resumeProxy(req.params.id);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/proxies/:id/reset-health', requireAdminAuth, async (req, res) => {
+    try {
+        await proxyPoolManager.resetHealth(req.params.id);
+        res.json({ success: true });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.delete('/api/admin/proxies/:id', requireAdminAuth, async (req, res) => {
+    try {
+        await db.query('DELETE FROM proxies WHERE id = $1', [req.params.id]);
+        res.json({ success: true });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -760,6 +1274,18 @@ if (USE_HTTPS) {
         `);
     });
 }
+
+// Schedule daily public health stats (runs at midnight UTC)
+setInterval(async () => {
+    const now = new Date();
+    if (now.getUTCHours() === 0 && now.getUTCMinutes() === 0) {
+        console.log('🔔 Sending daily public health stats...');
+        await sendPublicHealthStats();
+    }
+}, 60000); // Check every minute
+
+// Note: Removed automatic health stats on startup to avoid spam during development/restarts
+// Health stats will only be sent once daily at midnight UTC
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

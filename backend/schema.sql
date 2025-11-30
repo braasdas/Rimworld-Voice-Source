@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS elevenlabs_keys (
     promo_type VARCHAR(100),
     promo_expires_at DATE,
     notes TEXT,
+    country_code VARCHAR(10) DEFAULT 'us',  -- ISO 3166-1 alpha-2 country code for Oxylabs proxy
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
